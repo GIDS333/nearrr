@@ -1,0 +1,76 @@
+{
+ "nearly": [
+  {
+   "executor": "nearlytrade.near",
+   "predecessor": "1cd754c78eeb71972510c2cd6450d2c6f112c5ea84fe87c206eb3b82d849c088",
+   "signer": "1cd754c78eeb71972510c2cd6450d2c6f112c5ea84fe87c206eb3b82d849c088",
+   "txHash": "9tH4nFoRiSiu4rzjhp5a16YCN6AWQGQfdbVH9fe9jUcD",
+   "logs": [
+    "EVENT_JSON:{\"standard\":\"nearpad\",\"version\":\"2.0.0\",\"event\":\"tax_opts\",\"data\":[{\"id\":3611,\"buy_bps\":100,\"sell_bps\":100,\"creator_bps\":0,\"burn_bps\":0,\"holders_bps\":10000,\"platform_bps\":4000}]}",
+    "EVENT_JSON:{\"standard\":\"nearpad\",\"version\":\"2.0.0\",\"event\":\"launch_recipients_set\",\"data\":[{\"id\":3611}]}",
+    "EVENT_JSON:{\"standard\":\"nearpad\",\"version\":\"2.0.0\",\"event\":\"launch_split\",\"data\":[{\"id\":3611,\"recipients\":[[\"protocolfee.near\",2500],[\"protocolfee2.near\",2500],[\"holderspot.near\",2500],[\"referralpot.near\",2500]]}]}",
+    "EVENT_JSON:{\"standard\":\"nearpad\",\"version\":\"2.0.0\",\"event\":\"launch_started\",\"data\":[{\"id\":3611,\"token\":\"gld.nearlytrade.near\",\"creator\":\"1cd754c78eeb71972510c2cd6450d2c6f112c5ea84fe87c206eb3b82d849c088\",\"name\":\"Near Gold\",\"symbol\":\"GLD\",\"pool_id\":\"gld.nearlytrade.near|wrap.near|10000\",\"quote\":\"wrap.near\",\"init_point\":0,\"left_point\":200,\"right_point\":500000,\"dev_buy\":\"20000000000000000000000000\",\"ts_ms\":1793323897754,\"dev_buy_min_out\":\"18467302027817935690000000\"}]}"
+   ]
+  },
+  {
+   "executor": "nearlytrade.near",
+   "predecessor": "nearlytrade.near",
+   "signer": "1cd754c78eeb71972510c2cd6450d2c6f112c5ea84fe87c206eb3b82d849c088",
+   "txHash": "9tH4nFoRiSiu4rzjhp5a16YCN6AWQGQfdbVH9fe9jUcD",
+   "logs": [
+    "EVENT_JSON:{\"standard\":\"nearpad\",\"version\":\"2.0.0\",\"event\":\"launch_step_parked\",\"data\":[{\"id\":3611,\"step\":\"AddLiquidity\",\"reason\":\"first buy: resume with at least 260 TGas\"}]}"
+   ]
+  }
+ ],
+ "justhoot": [
+  {
+   "executor": "v2-launchpad.justhoot.near",
+   "predecessor": "soonseal1786.near",
+   "signer": "soonseal1786.near",
+   "txHash": "6z1b2i8BgubzYif26zdR6M3D2H5abvU4sQDnt8mjPpQR",
+   "logs": [
+    "EVENT_JSON:{\"standard\":\"hoot_launcher_v2\",\"version\":\"2.0.0\",\"event\":\"launch_requested\",\"data\":{\"creator_id\":\"soonseal1786.near\",\"quote_token_id\":\"wrap.near\",\"dev_buy_quote_max\":\"0\",\"from_deposit\":\"0\",\"wrapped_near\":\"0\",\"funding\":\"91060000000000000000000\"}}"
+   ]
+  },
+  {
+   "executor": "v2-launchpad.justhoot.near",
+   "predecessor": "v2-launchpad.justhoot.near",
+   "signer": "soonseal1786.near",
+   "txHash": "6z1b2i8BgubzYif26zdR6M3D2H5abvU4sQDnt8mjPpQR",
+   "logs": [
+    "EVENT_JSON:{\"standard\":\"hoot_launcher_v2\",\"version\":\"1.0.0\",\"event\":\"launch_funding_refunded\",\"data\":{\"token_id\":\"fatcat-2.v2-launchpad.justhoot.near\",\"creator_id\":\"soonseal1786.near\",\"amount\":\"1260000000000000000000\"}}",
+    "EVENT_JSON:{\"standard\":\"hoot_launcher_v2\",\"version\":\"3.0.0\",\"event\":\"launch_priced\",\"data\":{\"token_id\":\"fatcat-2.v2-launchpad.justhoot.near\",\"creator_id\":\"soonseal1786.near\",\"quote_token_id\":\"wrap.near\",\"dev_buy_quote_max\":\"0\",\"dev_buy_quote\":\"0\",\"initial_fiat_fdv\":5000,\"initial_fdv\":\"1194987181730997726106691371\",\"quote_price\":{\"price\":\"418414530\",\"conf\":\"1725470\",\"expo\":-8,\"publish_time\":1793308060},\"last_known_price\":false,\"fixed_price\":false,\"pool_price\":null}}",
+    "EVENT_JSON:{\"standard\":\"hoot_launcher_v2\",\"version\":\"1.0.0\",\"event\":\"launch_planned\",\"data\":{\"token_id\":\"fatcat-2.v2-launchpad.justhoot.near\",\"plan\":{\"pool_id\":\"fatcat-2.v2-launchpad.justhoot.near|wrap.near|10000\",\"fee_pips\":10000,\"init_point\":1799,\"token_position\":{\"left_point\":1800,\"right_point\":500000,\"amount_x\":\"1000000000000000000000000000\",\"amount_y\":\"0\"},\"quote_position\":null,\"dev_tokens\":\"0\",\"dev_quote\":\"0\"}}}"
+   ]
+  },
+  {
+   "executor": "v2-launchpad.justhoot.near",
+   "predecessor": "v2-launchpad.justhoot.near",
+   "signer": "soonseal1786.near",
+   "txHash": "6z1b2i8BgubzYif26zdR6M3D2H5abvU4sQDnt8mjPpQR",
+   "logs": [
+    "EVENT_JSON:{\"standard\":\"hoot_launcher_v2\",\"version\":\"1.0.0\",\"event\":\"dcl_pool_created\",\"data\":{\"token_id\":\"fatcat-2.v2-launchpad.justhoot.near\",\"pool_id\":\"fatcat-2.v2-launchpad.justhoot.near|wrap.near|10000\"}}"
+   ]
+  },
+  {
+   "executor": "v2-launchpad.justhoot.near",
+   "predecessor": "v2-launchpad.justhoot.near",
+   "signer": "soonseal1786.near",
+   "txHash": "6z1b2i8BgubzYif26zdR6M3D2H5abvU4sQDnt8mjPpQR",
+   "logs": [
+    "EVENT_JSON:{\"standard\":\"hoot_launcher_v2\",\"version\":\"1.0.0\",\"event\":\"meme_launched\",\"data\":{\"token_id\":\"fatcat-2.v2-launchpad.justhoot.near\",\"creator_id\":\"soonseal1786.near\",\"quote_token_id\":\"wrap.near\",\"dev_buy_quote\":\"0\"}}"
+   ]
+  }
+ ],
+ "memecooking": [
+  {
+   "executor": "meme-cooking.near",
+   "predecessor": "arz20.tg",
+   "signer": "arz20.tg",
+   "txHash": "FtvpPYgrhi6tg999drWvzdzMW2iAzzuaaxNBJZ5yJiPR",
+   "logs": [
+    "EVENT_JSON:{\"standard\":\"meme-cooking\",\"version\":\"1.0.0\",\"event\":\"create_meme\",\"data\":{\"meme_id\":2301,\"owner\":\"arz20.tg\",\"end_timestamp_ms\":\"1793438564488\",\"name\":\"GOP\",\"symbol\":\"00000001\",\"decimals\":18,\"total_supply\":\"1000000000000000000000000000\",\"reference\":\"Qma51EyikNLeiD1NQd99Mva2vZdzdb2XQdL22Z86gajmnx\",\"reference_hash\":\"DP7sF6re/6VoSncbq0ZXJRne56MvBAeAfkGusuqURqY=\",\"deposit_token_id\":\"wrap.near\",\"soft_cap\":\"100000000000000000000000000\",\"hard_cap\":\"500000000000000000000000000\"}}"
+   ]
+  }
+ ]
+}

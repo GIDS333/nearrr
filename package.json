@@ -1,0 +1,38 @@
+{
+  "name": "near-trade-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "quote": "tsx scripts/dryQuote.ts"
+  },
+  "dependencies": {
+    "@expo-google-fonts/inter": "^0.4.2",
+    "@iconify-json/fluent-emoji": "^1.2.7",
+    "@near-js/crypto": "^2.5.1",
+    "@near-js/transactions": "^2.5.1",
+    "@near-js/utils": "^2.5.1",
+    "@resvg/resvg-js": "^2.6.2",
+    "better-sqlite3": "^12.11.1",
+    "bs58": "^6.0.0",
+    "dotenv": "^18.0.8",
+    "grammy": "^1.46.0",
+    "ws": "^8.22.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^22.20.5",
+    "@types/ws": "^8.18.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

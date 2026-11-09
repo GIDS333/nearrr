@@ -2,7 +2,6 @@
 
 A private Telegram bot that trades NEAR memecoins from **JustHoot**, **Nearly**, **meme.cooking** and the **Intear** ecosystem, plus Nearly's **Ondo stocks**. One tap trades: there are no confirmation prompts. Only your admin Telegram account can use it.
 
-## How each token is routed
 
 The bot reads every token's live home pool (`main_pool` from the Intear API) and trades there. That is its "original route".
 

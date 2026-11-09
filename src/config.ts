@@ -32,7 +32,7 @@ export function loadConfig(): Config {
     adminId,
     accountId: required("NEAR_ACCOUNT_ID"),
     privateKey,
-    rpcUrls: (optional("RPC_URLS") ?? "https://rpc.mainnet.fastnear.com,https://near.lava.build,https://free.rpc.fastnear.com")
+    rpcUrls: (optional("RPC_URLS") ?? "https://rpc.mainnet.fastnear.com,https://rpc.mainnet.near.org,https://archival-rpc.mainnet.near.org")
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),

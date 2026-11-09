@@ -33,3 +33,37 @@ describe("Db trade log", () => {
     expect(db.untaggedTrades()).toEqual([]);
   });
 });
+
+describe("Db wallet management", () => {
+  it("stores, activates, switches, and removes wallets", () => {
+    const db = new Db(join(mkdtempSync(join(tmpdir(), "bot-")), "bot.db"));
+    expect(db.wallets()).toEqual([]);
+    expect(db.activeWallet()).toBeNull();
+
+    // ensureWallet initializes the initial wallet
+    db.ensureWallet("initial.near", "ed25519:key1");
+    expect(db.wallets().length).toBe(1);
+    expect(db.activeWallet()?.accountId).toBe("initial.near");
+    expect(db.activeWallet()?.privateKey).toBe("ed25519:key1");
+
+    // add new wallet as active
+    const w2 = db.addWallet("second.near", "ed25519:key2", true);
+    expect(db.wallets().length).toBe(2);
+    expect(db.activeWallet()?.accountId).toBe("second.near");
+
+    // switch back to initial
+    db.setActiveWallet("initial.near");
+    expect(db.activeWallet()?.accountId).toBe("initial.near");
+
+    // remove active wallet should promote remaining wallet to active
+    db.removeWallet(db.wallet("initial.near")!.id);
+    expect(db.wallets().length).toBe(1);
+    expect(db.activeWallet()?.accountId).toBe("second.near");
+
+    // remove last wallet
+    db.removeWallet(w2.id);
+    expect(db.wallets()).toEqual([]);
+    expect(db.activeWallet()).toBeNull();
+  });
+});
+

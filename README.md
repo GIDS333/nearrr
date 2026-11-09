@@ -25,6 +25,14 @@ Settings → **Route** can switch to *Best price (all DEXes)* if you ever prefer
 - **Positions**: tokens, stocks and raise deposits worth **more than $1**. The threshold is editable.
 - **Slippage**: 50% by default, editable (1–99%). A swap that would fill worse than this is refunded instead of filling.
 
+## Wallets (👛 on the home screen, or /wallets)
+
+- **Import wallet:** tap *➕ Import Wallet* and send your private key (`ed25519:...`) or account name and key (`<account.near> <private_key>`). The bot automatically removes your key message immediately for security, verifies the key on-chain, and sets it as the active wallet.
+- **Auto-discovery:** pasting just a private key automatically queries FastNEAR to look up associated named accounts or falls back to the implicit account.
+- **Multi-wallet switching:** switch between imported wallets with a single tap. Each wallet keeps its own separate positions and snipes.
+- **Create new wallet:** generate fresh key pairs and implicit account addresses directly inside Telegram.
+- **Export & remove:** view your active wallet's private key securely or remove unused wallets.
+
 ## Sniper (🎯 on the home screen, or /snipe)
 
 - **Creator snipe:** give a wallet and an amount. The bot watches launches on JustHoot, Nearly and meme.cooking

@@ -46,14 +46,14 @@ export class Rpc {
   }
 
   /** Read call: try endpoints in order, move on when one fails or is slow. */
-  async call<T>(method: string, params: unknown, timeoutMs = 4000): Promise<T> {
+  async call<T>(method: string, params: unknown, timeoutMs = 6000): Promise<T> {
     let last: unknown;
     for (const url of this.urls) {
       try {
         return await this.post<T>(url, method, params, timeoutMs);
       } catch (e) {
         last = e;
-        if (e instanceof RpcError && !/timeout|unavailable|too many/i.test(e.message)) throw e;
+        continue;
       }
     }
     throw last instanceof Error ? last : new Error("All RPC endpoints failed");
@@ -93,13 +93,18 @@ export class Rpc {
   }
 
   async accessKey(accountId: string, publicKey: string): Promise<{ nonce: bigint; blockHash: string }> {
-    const r = await this.call<{ nonce: number | string; block_hash: string }>("query", {
+    const r = await this.accessKeyInfo(accountId, publicKey);
+    return { nonce: r.nonce, blockHash: r.blockHash };
+  }
+
+  async accessKeyInfo(accountId: string, publicKey: string): Promise<{ nonce: bigint; permission: unknown; blockHash: string }> {
+    const r = await this.call<{ nonce: number | string; permission: unknown; block_hash: string }>("query", {
       request_type: "view_access_key",
       finality: "optimistic",
       account_id: accountId,
       public_key: publicKey,
     });
-    return { nonce: BigInt(r.nonce), blockHash: r.block_hash };
+    return { nonce: BigInt(r.nonce), permission: r.permission, blockHash: r.block_hash };
   }
 
   async latestBlockHash(): Promise<string> {

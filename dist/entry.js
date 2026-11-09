@@ -60,7 +60,7 @@ export function entryMarketCap(entryPriceUsd, currentMcapUsd, currentPriceUsd) {
  * partial exit, so the full cost applies; otherwise the cost scales with what's held.
  */
 export function holdingCost(entry, held) {
-    let ratio = entry.tokens > 0 ? held / entry.tokens : 0;
+    let ratio = entry.tokens > 0 ? Math.min(1, held / entry.tokens) : 0;
     if (ratio < 1 && ratio >= 1 - CLOSE_REMAINDER)
         ratio = 1;
     return { near: entry.costNear * ratio, usd: entry.costUsd * ratio };

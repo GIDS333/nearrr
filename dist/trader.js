@@ -39,6 +39,26 @@ export class Trader {
     get accountId() {
         return this.signer.accountId;
     }
+    get currentSigner() {
+        return this.signer;
+    }
+    get currentFt() {
+        return this.ft;
+    }
+    switchSigner(signer, ft) {
+        this.signer.stop();
+        this.signer = signer;
+        this.ft = ft;
+        this.dcl = new DclVenue(this.rpc, ft);
+        this.memeCooking = new MemeCookingVenue(this.rpc, ft, signer.accountId);
+        this.oneClick = new OneClickVenue(this.rpc, ft, signer.accountId, this.opts.oneClickJwt);
+        this.routes.clear();
+    }
+    async tokenDecimals(token, info) {
+        if (typeof info?.decimals === "number" && info.decimals > 0)
+            return info.decimals;
+        return this.prices.decimalsOf(token).catch(() => 24);
+    }
     routes = new Map();
     /** Works out the token's original venue from its live main pool (or uses the best price, if set). */
     async route(ref, settings, info) {
@@ -209,7 +229,7 @@ export class Trader {
             };
         }
         const [info, nearUsd, walletNear] = await Promise.all([this.intear.token(ref, 1500).catch(() => null), nearUsdP, walletP]);
-        const decimals = info?.decimals ?? (await this.rpc.view(ref, "ft_metadata").then((m) => m.decimals).catch(() => 24));
+        const decimals = await this.tokenDecimals(ref, info);
         const [route, balance, entry, live] = await Promise.all([
             this.route(ref, settings, info),
             this.ft.balance(ref),
@@ -422,7 +442,7 @@ export class Trader {
             throw e;
         }
         const [info, nearUsd] = await Promise.all([this.intear.token(token, 60_000).catch(() => null), this.intear.nearUsd().catch(() => 0)]);
-        const decimals = info?.decimals ?? 24;
+        const decimals = await this.tokenDecimals(token, info);
         const swapped = swappedOut(sent.map((x) => x.result), token, this.accountId) ?? quote.expectedOut;
         // Bookkeeping runs after the result is reported, so it never slows the trade down.
         const recorded = (async () => {
@@ -467,7 +487,7 @@ export class Trader {
         const amount = percentOf(balance, pct);
         if (amount <= 0n)
             throw new Error("You don't hold this token");
-        const decimals = info?.decimals ?? 24;
+        const decimals = await this.tokenDecimals(token, info);
         // The entry is worked out while the sell is quoted and sent, so it adds no delay.
         const entryP = this.entry(token, decimals, nearUsd).catch(() => null);
         const quote = await this.quoteToken("sell", token, amount, route, settings);

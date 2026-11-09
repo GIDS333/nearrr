@@ -47,8 +47,8 @@ export class Sniper {
     get watching() {
         return this.stream.active;
     }
-    add(kind, target, nearAmount) {
-        const row = this.db.addSnipe(this.trader.accountId, kind, target, nearAmount);
+    add(kind, target, nearAmount, targetMcap, mcapDirection, sellPct) {
+        const row = this.db.addSnipe(this.trader.accountId, kind, target, nearAmount, targetMcap, mcapDirection, sellPct);
         this.refresh();
         return row;
     }
@@ -67,18 +67,23 @@ export class Sniper {
             this.stream.start();
         else
             this.stream.stop();
-        const tokenIds = new Set(active.filter((s) => s.kind === "token").map((s) => s.id));
+        const pollIds = new Set(active.filter((s) => s.kind === "token" || s.kind === "limit_mcap" || s.kind === "limit_sell").map((s) => s.id));
         for (const [id, t] of this.pollers) {
-            if (!tokenIds.has(id)) {
+            if (!pollIds.has(id)) {
                 clearInterval(t);
                 this.pollers.delete(id);
             }
         }
         for (const s of active) {
-            if (s.kind !== "token" || this.pollers.has(s.id))
+            if ((s.kind !== "token" && s.kind !== "limit_mcap" && s.kind !== "limit_sell") || this.pollers.has(s.id))
                 continue;
-            this.pollers.set(s.id, setInterval(() => void this.pollToken(s), TOKEN_POLL_MS));
-            void this.pollToken(s);
+            const fn = s.kind === "limit_mcap"
+                ? () => void this.pollLimitMcap(s)
+                : s.kind === "limit_sell"
+                    ? () => void this.pollLimitSell(s)
+                    : () => void this.pollToken(s);
+            this.pollers.set(s.id, setInterval(fn, TOKEN_POLL_MS));
+            void fn();
         }
     }
     // ------------------------------------------------------------ creator snipes
@@ -160,7 +165,73 @@ export class Sniper {
             this.busy.delete(snipe.id);
         }
     }
-    // ------------------------------------------------------------ buying
+    async pollLimitMcap(snipe) {
+        if (this.busy.has(snipe.id))
+            return;
+        this.busy.add(snipe.id);
+        try {
+            if (this.db.snipe(snipe.id)?.status !== "active")
+                return;
+            const settings = this.db.settings();
+            const s = await this.trader.snapshot(snipe.target, settings).catch(() => null);
+            if (!s || !s.info || s.info.marketCapUsd <= 0)
+                return;
+            const currentMcap = s.info.marketCapUsd;
+            const targetMcap = snipe.targetMcap;
+            if (targetMcap == null || targetMcap <= 0)
+                return;
+            const triggered = snipe.mcapDirection === "gte"
+                ? currentMcap >= targetMcap
+                : currentMcap <= targetMcap;
+            if (!triggered)
+                return;
+            clearInterval(this.pollers.get(snipe.id));
+            this.pollers.delete(snipe.id);
+            const route = await this.trader.liveRoute(snipe.target, snipe.nearAmount, settings).catch(() => null);
+            if (!route)
+                return;
+            await this.execute(snipe, snipe.target, route, Date.now(), true);
+        }
+        finally {
+            this.busy.delete(snipe.id);
+        }
+    }
+    async pollLimitSell(snipe) {
+        if (this.busy.has(snipe.id))
+            return;
+        this.busy.add(snipe.id);
+        try {
+            if (this.db.snipe(snipe.id)?.status !== "active")
+                return;
+            const settings = this.db.settings();
+            const s = await this.trader.snapshot(snipe.target, settings).catch(() => null);
+            if (!s || !s.info || s.info.marketCapUsd <= 0)
+                return;
+            const currentMcap = s.info.marketCapUsd;
+            const targetMcap = snipe.targetMcap;
+            if (targetMcap == null || targetMcap <= 0)
+                return;
+            const triggered = snipe.mcapDirection === "gte"
+                ? currentMcap >= targetMcap
+                : currentMcap <= targetMcap;
+            if (!triggered)
+                return;
+            if (s.balance <= 0n) {
+                this.db.finishSnipe(snipe.id, "failed", "No token balance to sell");
+                this.refresh();
+                this.onEvent({ type: "failed", snipe, ref: snipe.target, error: "No token balance to sell", ended: true });
+                return;
+            }
+            clearInterval(this.pollers.get(snipe.id));
+            this.pollers.delete(snipe.id);
+            const sellPct = snipe.sellPct ?? 100;
+            await this.executeSell(snipe, snipe.target, sellPct, Date.now());
+        }
+        finally {
+            this.busy.delete(snipe.id);
+        }
+    }
+    // ------------------------------------------------------------ buying & selling
     /**
      * Buys once. A creator snipe that fails keeps watching for the creator's next launch;
      * a token snipe ends either way, so a failing buy can't repeat and burn gas.
@@ -185,6 +256,31 @@ export class Sniper {
                 this.refresh();
             }
             this.onEvent({ type: "failed", snipe, ref, error, ended: endOnFailure });
+        }
+    }
+    async executeSell(snipe, ref, pct, started) {
+        if (this.dryRun) {
+            this.db.finishSnipe(snipe.id, "done", `DRY RUN: would sell ${pct}% of ${ref}`);
+            this.refresh();
+            this.onEvent({
+                type: "dryRun",
+                snipe,
+                ref,
+                route: { kind: "router", label: `Sell ${pct}%` },
+            });
+            return;
+        }
+        try {
+            const outcome = await this.trader.sell(ref, pct, this.db.settings());
+            this.db.finishSnipe(snipe.id, "done", `Sold ${pct}% of ${ref}: ${outcome.hashes.at(-1) ?? ""}`);
+            this.refresh();
+            this.onEvent({ type: "bought", snipe, ref, outcome, secs: (Date.now() - started) / 1000 });
+        }
+        catch (e) {
+            const error = e instanceof Error ? e.message : String(e);
+            this.db.finishSnipe(snipe.id, "failed", error);
+            this.refresh();
+            this.onEvent({ type: "failed", snipe, ref, error, ended: true });
         }
     }
 }

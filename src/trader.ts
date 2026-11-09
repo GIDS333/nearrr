@@ -73,15 +73,15 @@ export interface Snapshot {
 }
 
 export class Trader {
-  readonly dcl: DclVenue;
-  readonly memeCooking: MemeCookingVenue;
-  readonly oneClick: OneClickVenue;
+  dcl: DclVenue;
+  memeCooking: MemeCookingVenue;
+  oneClick: OneClickVenue;
   readonly prices: LivePrices;
 
   constructor(
     private readonly rpc: Rpc,
-    private readonly signer: Signer,
-    private readonly ft: Ft,
+    private signer: Signer,
+    private ft: Ft,
     private readonly intear: Intear,
     private readonly db: Db,
     private readonly opts: { intearApiKey?: string; oneClickJwt?: string },
@@ -94,6 +94,29 @@ export class Trader {
 
   get accountId(): string {
     return this.signer.accountId;
+  }
+
+  get currentSigner(): Signer {
+    return this.signer;
+  }
+
+  get currentFt(): Ft {
+    return this.ft;
+  }
+
+  switchSigner(signer: Signer, ft: Ft): void {
+    this.signer.stop();
+    this.signer = signer;
+    this.ft = ft;
+    this.dcl = new DclVenue(this.rpc, ft);
+    this.memeCooking = new MemeCookingVenue(this.rpc, ft, signer.accountId);
+    this.oneClick = new OneClickVenue(this.rpc, ft, signer.accountId, this.opts.oneClickJwt);
+    this.routes.clear();
+  }
+
+  async tokenDecimals(token: string, info?: TokenInfo | null): Promise<number> {
+    if (typeof info?.decimals === "number" && info.decimals > 0) return info.decimals;
+    return this.prices.decimalsOf(token).catch(() => 24);
   }
 
   private routes = new Map<string, { at: number; route: Route }>();
@@ -261,7 +284,7 @@ export class Trader {
     }
 
     const [info, nearUsd, walletNear] = await Promise.all([this.intear.token(ref, 1500).catch(() => null), nearUsdP, walletP]);
-    const decimals = info?.decimals ?? (await this.rpc.view<{ decimals: number }>(ref, "ft_metadata").then((m) => m.decimals).catch(() => 24));
+    const decimals = await this.tokenDecimals(ref, info);
     const [route, balance, entry, live] = await Promise.all([
       this.route(ref, settings, info),
       this.ft.balance(ref),
@@ -467,7 +490,7 @@ export class Trader {
       throw e;
     }
     const [info, nearUsd] = await Promise.all([this.intear.token(token, 60_000).catch(() => null), this.intear.nearUsd().catch(() => 0)]);
-    const decimals = info?.decimals ?? 24;
+    const decimals = await this.tokenDecimals(token, info);
     const swapped = swappedOut(sent.map((x) => x.result), token, this.accountId) ?? quote.expectedOut;
     // Bookkeeping runs after the result is reported, so it never slows the trade down.
     const recorded = (async () => {
@@ -507,7 +530,7 @@ export class Trader {
     ]);
     const amount = percentOf(balance, pct);
     if (amount <= 0n) throw new Error("You don't hold this token");
-    const decimals = info?.decimals ?? 24;
+    const decimals = await this.tokenDecimals(token, info);
     // The entry is worked out while the sell is quoted and sent, so it adds no delay.
     const entryP = this.entry(token, decimals, nearUsd).catch(() => null);
     const quote = await this.quoteToken("sell", token, amount, route, settings);

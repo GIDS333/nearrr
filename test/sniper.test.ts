@@ -71,4 +71,54 @@ describe("Db snipes", () => {
     expect(db.activeSnipes("me.near")).toEqual([]);
     expect(db.settings().snipeMaxDelaySec).toBe(20);
   });
+
+  it("stores and queries limit_mcap snipes with targetMcap and mcapDirection", () => {
+    const db = new Db(join(mkdtempSync(join(tmpdir(), "bot-")), "bot.db"));
+    const limitOrder = db.addSnipe("me.near", "limit_mcap", "hoot.near", 10, 50000, "lte");
+    expect(limitOrder.kind).toBe("limit_mcap");
+    expect(limitOrder.targetMcap).toBe(50000);
+    expect(limitOrder.mcapDirection).toBe("lte");
+
+    const active = db.activeSnipes("me.near");
+    expect(active.length).toBe(1);
+    expect(active[0]!.targetMcap).toBe(50000);
+    expect(active[0]!.mcapDirection).toBe("lte");
+
+    expect(db.finishSnipe(limitOrder.id, "done", "bought at target mcap")).toBe(true);
+    expect(db.activeSnipes("me.near")).toEqual([]);
+  });
+
+  it("stores and queries limit_sell snipes with targetMcap, direction, and sellPct", () => {
+    const db = new Db(join(mkdtempSync(join(tmpdir(), "bot-")), "bot.db"));
+    const limitSell = db.addSnipe("me.near", "limit_sell", "hoot.near", 0, 150000, "gte", 50);
+    expect(limitSell.kind).toBe("limit_sell");
+    expect(limitSell.targetMcap).toBe(150000);
+    expect(limitSell.mcapDirection).toBe("gte");
+    expect(limitSell.sellPct).toBe(50);
+
+    const active = db.activeSnipes("me.near");
+    expect(active.length).toBe(1);
+    expect(active[0]!.kind).toBe("limit_sell");
+    expect(active[0]!.targetMcap).toBe(150000);
+    expect(active[0]!.sellPct).toBe(50);
+
+    expect(db.finishSnipe(limitSell.id, "done", "sold 50% at target mcap")).toBe(true);
+    expect(db.activeSnipes("me.near")).toEqual([]);
+  });
+});
+
+describe("parseMcap", () => {
+  it("correctly parses amounts with suffixes and currencies", async () => {
+    const { parseMcap } = await import("../src/bot/format.js");
+    expect(parseMcap("50k")).toBe(50000);
+    expect(parseMcap("$50K")).toBe(50000);
+    expect(parseMcap("1.5m")).toBe(1500000);
+    expect(parseMcap("$2.5M")).toBe(2500000);
+    expect(parseMcap("1b")).toBe(1000000000);
+    expect(parseMcap("250,000")).toBe(250000);
+    expect(parseMcap("$500000")).toBe(500000);
+    expect(parseMcap("invalid")).toBeNull();
+    expect(parseMcap("-100")).toBeNull();
+    expect(parseMcap("0")).toBeNull();
+  });
 });

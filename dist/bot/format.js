@@ -13,6 +13,28 @@ export function compact(n, digits = 2) {
         return (n / 1e3).toFixed(digits) + "K";
     return n.toFixed(a >= 1 ? digits : 4);
 }
+/** Parses user input like "50k", "$1.5m", "250,000", "500000" into a USD number. */
+export function parseMcap(text) {
+    const clean = text.trim().replace(/^\$/, "").replace(/,/g, "").trim().toLowerCase();
+    const match = clean.match(/^([\d.]+)\s*([kmbt])?$/);
+    if (!match)
+        return null;
+    const val = Number(match[1]);
+    if (!Number.isFinite(val) || val <= 0)
+        return null;
+    const suffix = match[2];
+    if (!suffix)
+        return val;
+    if (suffix === "k")
+        return val * 1_000;
+    if (suffix === "m")
+        return val * 1_000_000;
+    if (suffix === "b")
+        return val * 1_000_000_000;
+    if (suffix === "t")
+        return val * 1_000_000_000_000;
+    return null;
+}
 /** Small prices use subscript zeros: 0.00000123 -> 0.0₅123 */
 export function price(n) {
     if (!Number.isFinite(n) || n <= 0)
@@ -29,6 +51,7 @@ export const usd = (n) => (Math.abs(n) >= 1000 ? `$${compact(n)}` : `$${n.toFixe
 export const usdPrice = (n) => `$${price(n)}`;
 export const near = (n) => `${n >= 100 ? n.toFixed(1) : n >= 1 ? n.toFixed(3) : n.toPrecision(3)} Ⓝ`;
 export const signedNear = (n) => `${n >= 0 ? "+" : "−"}${near(Math.abs(n))}`;
+export const signedUsd = (n) => `${n >= 0 ? "+" : "−"}${usd(Math.abs(n))}`;
 export const pct = (n) => (n == null ? "–" : `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`);
 export const pnlEmoji = (n) => (n == null ? "⚪" : n >= 0 ? "🟢" : "🔴");
 export const txLink = (hash) => `<a href="https://nearblocks.io/txns/${hash}">tx</a>`;
@@ -48,26 +71,27 @@ export function tokenCard(s) {
     lines.push(`<code>${esc(s.ref)}</code>`);
     lines.push(`🛣 ${esc(s.route.label)}`);
     lines.push("");
-    lines.push(`💲 Price: ${usdPrice(priceUsd)}${i?.change24h != null ? `  (${pct(i.change24h * 100)} 24h)` : ""}`);
-    lines.push(`📊 Market cap: ${i?.marketCapUsd ? usd(i.marketCapUsd) : "–"}`);
-    lines.push(`💧 Liquidity: ${i?.liquidityUsd ? usd(i.liquidityUsd) : "–"}`);
-    lines.push("");
+    lines.push(`📊 Market cap: <b>${i?.marketCapUsd ? usd(i.marketCapUsd) : "–"}</b>${i?.change24h != null ? `  (${pct(i.change24h * 100)} 24h)` : ""}`);
     if (s.entry) {
         const mcAtEntry = i ? entryMarketCap(s.entry.priceUsd, i.marketCapUsd, i.priceUsd) : 0;
         const cost = holdingCost(s.entry, held);
         const p = pnlPct(worthNear, cost.near);
-        lines.push(`🎯 Entry: ${usdPrice(s.entry.priceUsd)} · ${near(s.entry.priceNear)}`);
-        lines.push(`🏁 Entry market cap: ${mcAtEntry ? usd(mcAtEntry) : "–"}`);
-        if (held > 0)
-            lines.push(`${pnlEmoji(p)} PnL: ${pct(p)} · ${signedNear(worthNear - cost.near)} (cost ${near(cost.near)})`);
+        const gainNear = worthNear - cost.near;
+        const gainUsd = worthUsd - cost.usd;
+        lines.push(`🎯 Entry MC: <b>${mcAtEntry ? usd(mcAtEntry) : "–"}</b>`);
+        if (held > 0) {
+            lines.push("");
+            lines.push(`${pnlEmoji(p)} <b>PnL: ${pct(p)} · ${signedNear(gainNear)} (${signedUsd(gainUsd)})</b>`);
+        }
     }
     else {
-        lines.push(`🎯 Entry: –`);
+        lines.push(`🎯 Entry MC: –`);
     }
-    lines.push(`📦 Holding: ${compact(held)} ${esc(symbol)}`);
-    lines.push(`💰 Worth: <b>${near(worthNear)}</b> · <b>${usd(worthUsd)}</b>`);
     lines.push("");
-    lines.push(`👛 Wallet: ${near(s.walletNear)}`);
+    lines.push(`💰 Worth: <b>${near(worthNear)}</b> · <b>${usd(worthUsd)}</b>`);
+    lines.push(`📦 Holding: <b>${compact(held)} ${esc(symbol)}</b>`);
+    lines.push("");
+    lines.push(`👛 Wallet: <b>${near(s.walletNear)}</b>`);
     return lines.join("\n");
 }
 function memeCard(s) {

@@ -9,10 +9,23 @@ import { parseInput } from "../venues/parse.js";
 import { STOCKS } from "../venues/stocks.js";
 import { INTENTS, stockAsset } from "../venues/oneclick.js";
 import { MEME_COOKING } from "../venues/memecooking.js";
-import { compact, esc, near, pct, pnlEmoji, tokenCard, txLink, usd } from "./format.js";
+import { compact, esc, near, parseMcap, pct, pnlEmoji, tokenCard, txLink, usd } from "./format.js";
 import { pnlCardData, renderPnlCard } from "./pnlCard.js";
 import type { SnipeRow } from "../db.js";
 import type { Sniper, SnipeEvent } from "../sniper/sniper.js";
+
+// Helper to safely answer callback queries without throwing if the query is outdated or network fails
+async function safeAnswer(ctx: Context, text?: string) {
+  try {
+    if (text) await ctx.answerCallbackQuery(text);
+    else await ctx.answerCallbackQuery();
+  } catch (_) {
+    // Silently ignore errors such as "query is too old" or network issues
+  }
+}
+import { generateNewWallet, findAccountsForPublicKey, parsePrivateKey, parseWalletInput, verifyAccessKey } from "../near/wallet.js";
+import { Signer } from "../near/signer.js";
+import { Ft } from "../near/ft.js";
 
 type Pending =
   | { kind: "buyX"; tid: number }
@@ -24,7 +37,15 @@ type Pending =
   | { kind: "wdAmount"; asset: string; to: string }
   | { kind: "snipeTarget"; mode: SnipeRow["kind"] }
   | { kind: "snipeAmount"; mode: SnipeRow["kind"]; target: string }
-  | { kind: "setDelay" };
+  | { kind: "limitTokenAddress" }
+  | { kind: "limitMcapTarget"; target: string; currentMcap?: number }
+  | { kind: "limitMcapAmount"; target: string; targetMcap: number; direction: "lte" | "gte" }
+  | { kind: "limitSellTokenAddress" }
+  | { kind: "limitSellMcapTarget"; target: string; currentMcap?: number; held?: number; symbol?: string }
+  | { kind: "limitSellPct"; target: string; targetMcap: number; direction: "lte" | "gte" }
+  | { kind: "setDelay" }
+  | { kind: "importWallet" }
+  | { kind: "importWalletAccount"; privateKey: string; publicKey: string; implicitAccountId: string; candidates?: string[] };
 
 interface Deps {
   token: string;
@@ -60,6 +81,9 @@ export function createBot(d: Deps): Bot {
     kb.text("🟢 Buy X Ⓝ", `bx:${tid}`).row();
     settings.sellPresets.forEach((p) => kb.text(`🔴 ${p}%`, `s:${tid}:${p}`));
     kb.row();
+    if (s.kind !== "stock") {
+      kb.text("🎯 Limit Buy", `lb:${tid}`).text("🔴 Limit Sell", `ls:${tid}`).row();
+    }
     if (s.meme?.status === "launched") kb.text("🎁 Claim from raise", `c:${tid}`).row();
     if (s.meme?.status === "failed") kb.text("↩️ Claim NEAR refund", `c:${tid}`).row();
     if (!s.ref.includes(":") && s.balance > 0n) kb.text("💸 Withdraw", `w:${tid}`).row();
@@ -113,9 +137,54 @@ export function createBot(d: Deps): Bot {
     ].join("\n");
     const kb = new InlineKeyboard()
       .text("📈 Positions", "pos").text("🎯 Sniper", "snp").text("⚙️ Settings", "set").row()
-      .text("💸 Withdraw NEAR", "w:near").text("🔄 Refresh", "home");
+      .text("👛 Wallets", "wallets").text("💸 Withdraw NEAR", "w:near").text("🔄 Refresh", "home");
     if (edit) await ctx.editMessageText(text, { ...HTML, reply_markup: kb }).catch(ignoreNotModified);
     else await ctx.reply(text, { ...HTML, reply_markup: kb });
+  }
+
+  async function walletsView(): Promise<{ text: string; kb: InlineKeyboard }> {
+    const list = d.db.wallets();
+    const [bal, nearUsd] = await Promise.all([
+      d.trader.walletNear().then(yoctoToNear).catch(() => 0),
+      d.intear.nearUsd().catch(() => 0),
+    ]);
+    const lines = [
+      "<b>👛 Wallets</b>",
+      "",
+      `Active: <code>${esc(d.trader.accountId)}</code>`,
+      `Balance: <b>${near(bal)}</b> · ${usd(bal * nearUsd)}`,
+      `Public key: <code>${esc(d.trader.currentSigner.publicKey)}</code>`,
+      "",
+      `<b>Saved Wallets (${list.length}):</b>`,
+    ];
+    for (const w of list) {
+      const isAct = w.accountId === d.trader.accountId;
+      const label = w.accountId.length > 24 ? `${w.accountId.slice(0, 10)}…${w.accountId.slice(-8)}` : w.accountId;
+      lines.push(`${isAct ? "✅ <b>" : "• <code>"}${esc(label)}${isAct ? "</b> (Active)" : "</code>"}`);
+    }
+
+    const kb = new InlineKeyboard();
+    const others = list.filter((w) => w.accountId !== d.trader.accountId);
+    if (others.length > 0) {
+      others.forEach((w, i) => {
+        const short = w.accountId.length > 18 ? `${w.accountId.slice(0, 8)}…${w.accountId.slice(-6)}` : w.accountId;
+        kb.text(`Switch: ${short}`, `w_act:${w.id}`);
+        if (i % 2 === 1) kb.row();
+      });
+      if (others.length % 2 === 1) kb.row();
+    }
+    kb.text("➕ Import Wallet", "w_import").text("✨ New Wallet", "w_new").row();
+    if (list.length > 1) {
+      kb.text("🗑 Remove Wallet", "w_rm_menu");
+    }
+    kb.text("🔑 Export Key", "w_export").text("⬅️ Home", "home");
+    return { text: lines.join("\n"), kb };
+  }
+
+  async function showWallets(ctx: Context, edit = false): Promise<void> {
+    const v = await walletsView();
+    if (edit) await ctx.editMessageText(v.text, { ...HTML, reply_markup: v.kb }).catch(ignoreNotModified);
+    else await ctx.reply(v.text, { ...HTML, reply_markup: v.kb });
   }
 
   function settingsView(): { text: string; kb: InlineKeyboard } {
@@ -260,42 +329,247 @@ export function createBot(d: Deps): Bot {
 
   bot.command(["start", "home"], (ctx) => home(ctx));
   bot.command("positions", (ctx) => positions(ctx, false));
+  bot.command(["wallets", "wallet"], (ctx) => showWallets(ctx));
   bot.command("settings", (ctx) => {
     const v = settingsView();
     return ctx.reply(v.text, { ...HTML, reply_markup: v.kb });
   });
 
-  bot.callbackQuery("home", async (ctx) => {
+  bot.callbackQuery("wallets", async (ctx) => {
     await ctx.answerCallbackQuery();
+    await showWallets(ctx, true);
+  });
+
+  bot.callbackQuery(/^w_act:(\d+)$/, async (ctx) => {
+    const id = Number(ctx.match[1]);
+    const w = d.db.walletById(id);
+    if (!w) return void ctx.answerCallbackQuery("Wallet not found.");
+    await ctx.answerCallbackQuery(`Switching to ${w.accountId}…`);
+    try {
+      const newSigner = new Signer(d.rpc, w.accountId, w.privateKey, d.dryRun);
+      await newSigner.init();
+      const newFt = new Ft(d.rpc, w.accountId);
+      d.trader.switchSigner(newSigner, newFt);
+      d.db.setActiveWallet(id);
+      d.sniper.refresh();
+      await showWallets(ctx, true);
+    } catch (e) {
+      await ctx.reply(`⚠️ Failed to switch wallet: ${esc(errorText(e))}`, HTML);
+    }
+  });
+
+  bot.callbackQuery("w_import", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    pending.set(ctx.chat!.id, { kind: "importWallet" });
+    const kb = new InlineKeyboard().text("✖️ Cancel", "w_cancel");
+    const text = [
+      "📥 <b>Import Wallet</b>",
+      "",
+      "Send your NEAR private key (e.g. <code>ed25519:...</code>) or account and private key:",
+      "<code>&lt;account.near&gt; &lt;ed25519:...&gt;</code>",
+      "",
+      "<i>🔒 For your security, your message will be automatically deleted immediately after being received.</i>",
+    ].join("\n");
+    await ctx.reply(text, { ...HTML, reply_markup: kb });
+  });
+
+  bot.callbackQuery("w_new", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    try {
+      const generated = generateNewWallet();
+      const row = d.db.addWallet(generated.implicitAccountId, generated.privateKey, false);
+      const kb = new InlineKeyboard()
+        .text("⚡ Switch to this wallet", `w_act:${row.id}`)
+        .row()
+        .text("👛 Wallets", "wallets")
+        .text("🗑 Delete message", "del_msg");
+      const text = [
+        "✨ <b>New NEAR Wallet Created</b>",
+        "",
+        `Address (Implicit): <code>${generated.implicitAccountId}</code>`,
+        `Public Key: <code>${esc(generated.publicKey)}</code>`,
+        "",
+        `Private Key:\n<code>${esc(generated.privateKey)}</code>`,
+        "",
+        "⚠️ <b>SAVE THIS KEY NOW!</b> The key is saved in the bot's database, but you should back it up.",
+        "Fund this wallet with at least 0.1 NEAR from any exchange or wallet to activate it on-chain.",
+      ].join("\n");
+      await ctx.reply(text, { ...HTML, reply_markup: kb });
+    } catch (e) {
+      await ctx.reply(`⚠️ Failed to generate wallet: ${esc(errorText(e))}`, HTML);
+    }
+  });
+
+  bot.callbackQuery("w_export", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const kb = new InlineKeyboard()
+      .text("👁 Reveal Private Key", "w_export_confirm")
+      .text("✖️ Cancel", "wallets");
+    await ctx.reply(
+      `⚠️ <b>Export Private Key</b>\n\nAre you sure you want to reveal the private key for <code>${esc(d.trader.accountId)}</code>?\n\nMake sure nobody else can see your screen.`,
+      { ...HTML, reply_markup: kb },
+    );
+  });
+
+  bot.callbackQuery("w_export_confirm", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const w = d.db.activeWallet();
+    if (!w) return void ctx.reply("Active wallet not found in database.");
+    const kb = new InlineKeyboard().text("🗑 Delete this message", "del_msg").text("👛 Wallets", "wallets");
+    const text = [
+      `🔑 <b>Private Key for ${esc(w.accountId)}</b>:`,
+      "",
+      `<code>${esc(w.privateKey)}</code>`,
+      "",
+      "<i>🔒 Copy your key and tap 'Delete this message' when finished.</i>",
+    ].join("\n");
+    await ctx.reply(text, { ...HTML, reply_markup: kb });
+  });
+
+  bot.callbackQuery("w_rm_menu", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const list = d.db.wallets();
+    if (list.length <= 1) return void ctx.reply("Cannot remove the only wallet.");
+    const kb = new InlineKeyboard();
+    for (const w of list) {
+      const short = w.accountId.length > 20 ? `${w.accountId.slice(0, 8)}…${w.accountId.slice(-6)}` : w.accountId;
+      kb.text(`❌ Remove ${short}`, `w_rm:${w.id}`).row();
+    }
+    kb.text("⬅️ Back to Wallets", "wallets");
+    await ctx.reply("Select a wallet to remove from the bot:", { ...HTML, reply_markup: kb });
+  });
+
+  bot.callbackQuery(/^w_rm:(\d+)$/, async (ctx) => {
+    const id = Number(ctx.match[1]);
+    const target = d.db.walletById(id);
+    if (!target) return void ctx.answerCallbackQuery("Wallet not found.");
+    const list = d.db.wallets();
+    if (list.length <= 1) return void ctx.answerCallbackQuery("Cannot remove the only wallet.");
+    await ctx.answerCallbackQuery(`Removed ${target.accountId}`);
+    const wasActive = target.accountId === d.trader.accountId;
+    d.db.removeWallet(id);
+    if (wasActive) {
+      const nextActive = d.db.activeWallet();
+      if (nextActive) {
+        const newSigner = new Signer(d.rpc, nextActive.accountId, nextActive.privateKey, d.dryRun);
+        await newSigner.init();
+        const newFt = new Ft(d.rpc, nextActive.accountId);
+        d.trader.switchSigner(newSigner, newFt);
+        d.sniper.refresh();
+      }
+    }
+    await showWallets(ctx);
+  });
+
+  bot.callbackQuery(/^w_pick:(.+)$/, async (ctx) => {
+    const pick = ctx.match[1]!;
+    const p = pending.get(ctx.chat!.id);
+    if (!p || p.kind !== "importWalletAccount") {
+      await safeAnswer(ctx, "Import session expired.");
+      return void ctx.reply("Import session expired. Please tap '➕ Import Wallet' again.", HTML);
+    }
+    let accountId = "";
+    if (pick === "imp" || pick === "implicit") {
+      accountId = p.implicitAccountId;
+    } else {
+      const idx = Number(pick);
+      if (Number.isInteger(idx) && p.candidates && p.candidates[idx]) {
+        accountId = p.candidates[idx]!;
+      } else {
+        accountId = pick;
+      }
+    }
+    await safeAnswer(ctx, `Selected ${accountId.length > 15 ? accountId.slice(0, 12) + "…" : accountId}`);
+    await finalizeWalletImport(ctx, accountId, p.privateKey, p.publicKey);
+  });
+
+  bot.callbackQuery("w_cancel", async (ctx) => {
+    pending.delete(ctx.chat!.id);
+    await safeAnswer(ctx, "Cancelled");
+    await showWallets(ctx);
+  });
+
+  bot.callbackQuery("del_msg", async (ctx) => {
+    await ctx.deleteMessage().catch(() => {});
+  });
+
+  bot.callbackQuery("home", async (ctx) => {
+    await safeAnswer(ctx);
     await home(ctx, true);
   });
   bot.callbackQuery("pos", async (ctx) => {
-    await ctx.answerCallbackQuery("Loading positions…");
-    await positions(ctx, ctx.callbackQuery.message?.text?.startsWith("📈") ?? false);
+    await safeAnswer(ctx, "Loading positions…");
+    // Run positions without awaiting the answer to avoid timeout issues
+    void positions(ctx, ctx.callbackQuery.message?.text?.startsWith("📈") ?? false);
   });
   bot.callbackQuery("set", async (ctx) => {
-    await ctx.answerCallbackQuery();
+    await safeAnswer(ctx);
     const v = settingsView();
     await ctx.reply(v.text, { ...HTML, reply_markup: v.kb });
   });
 
   bot.callbackQuery(/^o:(\d+)(:n)?$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
+    await safeAnswer(ctx);
     const ref = d.db.tokenRef(Number(ctx.match[1]));
     if (ref) await showCard(ctx, ref, !ctx.match[2]);
   });
 
   bot.callbackQuery(/^b:(\d+):(\d+)$/, async (ctx) => {
     const amount = d.db.settings().buyPresets[Number(ctx.match[2])];
-    if (amount == null) return void ctx.answerCallbackQuery("Button changed, refresh the card");
-    await ctx.answerCallbackQuery(`Buying ${amount} NEAR`);
+    if (amount == null) return void safeAnswer(ctx, "Button changed, refresh the card");
+    await safeAnswer(ctx, `Buying ${amount} NEAR`);
     void runTrade(ctx, Number(ctx.match[1]), `Buy ${amount} NEAR`, (ref, s) => buy(ref, amount, s));
   });
 
   bot.callbackQuery(/^bx:(\d+)$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
+    await safeAnswer(ctx);
     pending.set(ctx.chat!.id, { kind: "buyX", tid: Number(ctx.match[1]) });
     await ctx.reply("How much NEAR? Reply with a number, e.g. <code>35</code>", { ...HTML, reply_markup: { force_reply: true } });
+  });
+
+  bot.callbackQuery(/^lb:(\d+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const tid = Number(ctx.match[1]);
+    const ref = d.db.tokenRef(tid);
+    if (!ref) return void ctx.reply("Token expired, paste it again.");
+    let currentMcap: number | undefined;
+    try {
+      const s = await d.trader.snapshot(ref, d.db.settings());
+      if (s.info?.marketCapUsd && s.info.marketCapUsd > 0) {
+        currentMcap = s.info.marketCapUsd;
+      }
+    } catch {}
+    pending.set(ctx.chat!.id, { kind: "limitMcapTarget", target: ref, currentMcap });
+    const mcapInfo = currentMcap ? `\nCurrent Market Cap: <b>$${compact(currentMcap)}</b>\n` : "";
+    await ctx.reply(
+      `🎯 <b>Limit Buy</b> for <code>${esc(ref)}</code>${mcapInfo}\nReply with target <b>Market Cap</b> in USD (e.g. <code>50k</code>, <code>500000</code>, <code>1.5m</code>):`,
+      { ...HTML, reply_markup: { force_reply: true } },
+    );
+  });
+
+  bot.callbackQuery(/^ls:(\d+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const tid = Number(ctx.match[1]);
+    const ref = d.db.tokenRef(tid);
+    if (!ref) return void ctx.reply("Token expired, paste it again.");
+    let currentMcap: number | undefined;
+    let held = 0;
+    let symbol = ref.split(".")[0]!.toUpperCase();
+    try {
+      const s = await d.trader.snapshot(ref, d.db.settings());
+      if (s.info?.marketCapUsd && s.info.marketCapUsd > 0) {
+        currentMcap = s.info.marketCapUsd;
+      }
+      if (s.info?.symbol) symbol = s.info.symbol;
+      held = fromRaw(s.balance, s.decimals);
+    } catch {}
+    pending.set(ctx.chat!.id, { kind: "limitSellMcapTarget", target: ref, currentMcap, held, symbol });
+    const mcapInfo = currentMcap ? `\nCurrent Market Cap: <b>$${compact(currentMcap)}</b>` : "";
+    const balanceInfo = held > 0 ? `\n📦 Holding: <b>${compact(held)} ${esc(symbol)}</b>` : "";
+    await ctx.reply(
+      `🔴 <b>Limit Sell</b> for <code>${esc(ref)}</code>${balanceInfo}${mcapInfo}\n\nReply with target <b>Market Cap</b> in USD to trigger the sell (e.g. <code>250k</code>, <code>1.5m</code>, <code>50k</code>):`,
+      { ...HTML, reply_markup: { force_reply: true } },
+    );
   });
 
   bot.callbackQuery(/^s:(\d+):([\d.]+)$/, async (ctx) => {
@@ -403,14 +677,24 @@ export function createBot(d: Deps): Bot {
   function sniperView(): { text: string; kb: InlineKeyboard } {
     const active = d.sniper.active();
     const delay = d.db.settings().snipeMaxDelaySec;
-    const lines = ["<b>🎯 Sniper</b>", ""];
-    if (!active.length) lines.push("No active snipes.");
+    const lines = ["<b>🎯 Sniper & Limit Orders</b>", ""];
+    if (!active.length) lines.push("No active orders.");
     for (const s of active) {
-      lines.push(
-        s.kind === "creator"
-          ? `👤 <code>${esc(s.target)}</code>\n    buys <b>${near(s.nearAmount)}</b> of their next launch (JustHoot, Nearly, meme.cooking)`
-          : `🪙 <code>${esc(snipeTarget(s))}</code>\n    buys <b>${near(s.nearAmount)}</b> as soon as it trades`,
-      );
+      if (s.kind === "creator") {
+        lines.push(`👤 <code>${esc(s.target)}</code>\n    buys <b>${near(s.nearAmount)}</b> of their next launch (JustHoot, Nearly, meme.cooking)`);
+      } else if (s.kind === "limit_mcap") {
+        const dir = s.mcapDirection === "gte" ? "≥" : "≤";
+        const mcapStr = s.targetMcap ? `$${compact(s.targetMcap)}` : "–";
+        lines.push(`🎯 <code>${esc(snipeTarget(s))}</code>\n    limit buy <b>${near(s.nearAmount)}</b> when MCap ${dir} <b>${mcapStr}</b>`);
+      } else if (s.kind === "limit_sell") {
+        const dir = s.mcapDirection === "gte" ? "≥" : "≤";
+        const mcapStr = s.targetMcap ? `$${compact(s.targetMcap)}` : "–";
+        const pctStr = `${s.sellPct ?? 100}%`;
+        const tpSl = s.mcapDirection === "gte" ? "Take Profit" : "Stop Loss";
+        lines.push(`🔴 <code>${esc(snipeTarget(s))}</code>\n    limit sell <b>${pctStr}</b> (${tpSl}) when MCap ${dir} <b>${mcapStr}</b>`);
+      } else {
+        lines.push(`🪙 <code>${esc(snipeTarget(s))}</code>\n    buys <b>${near(s.nearAmount)}</b> as soon as it trades`);
+      }
     }
     lines.push(
       "",
@@ -418,8 +702,12 @@ export function createBot(d: Deps): Bot {
       `⏱ Skip a launch seen more than <b>${delay}s</b> late`,
     );
     const kb = new InlineKeyboard();
-    for (const s of active) kb.text(`✖️ Cancel ${s.kind === "creator" ? "👤" : "🪙"} ${snipeTarget(s).slice(0, 24)}`, `snx:${s.id}`).row();
-    kb.text("➕ Snipe creator", "snp:c").text("➕ Snipe token", "snp:t").row();
+    for (const s of active) {
+      const icon = s.kind === "creator" ? "👤" : s.kind === "limit_mcap" ? "🎯" : s.kind === "limit_sell" ? "🔴" : "🪙";
+      kb.text(`✖️ Cancel ${icon} ${snipeTarget(s).slice(0, 20)}`, `snx:${s.id}`).row();
+    }
+    kb.text("➕ Creator", "snp:c").text("➕ Token", "snp:t").row();
+    kb.text("🎯 Limit Buy", "snp:m").text("🔴 Limit Sell", "snp:ls").row();
     kb.text(`⏱ Max delay ${delay}s`, "set:delay").text("🔄", "snp").text("⬅️ Home", "home");
     return { text: lines.join("\n"), kb };
   }
@@ -447,9 +735,56 @@ export function createBot(d: Deps): Bot {
     await ctx.reply(ask, { ...HTML, reply_markup: { force_reply: true } });
   });
 
+  bot.callbackQuery("snp:m", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    pending.set(ctx.chat!.id, { kind: "limitTokenAddress" });
+    await ctx.reply(
+      "🎯 <b>Limit Buy (Market Cap)</b>\n\nSend the <b>token address or link</b> you want to place a limit buy for:",
+      { ...HTML, reply_markup: { force_reply: true } },
+    );
+  });
+
+  bot.callbackQuery("snp:ls", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    pending.set(ctx.chat!.id, { kind: "limitSellTokenAddress" });
+    await ctx.reply(
+      "🔴 <b>Limit Sell (Market Cap)</b>\n\nSend the <b>token address or link</b> you want to place a limit sell for:",
+      { ...HTML, reply_markup: { force_reply: true } },
+    );
+  });
+
+  bot.callbackQuery(/^lsp:(\d+)$/, async (ctx) => {
+    const pct = Number(ctx.match[1]);
+    const chatId = ctx.chat!.id;
+    const p = pending.get(chatId);
+    if (!p || p.kind !== "limitSellPct") {
+      return void ctx.answerCallbackQuery("Order expired or changed");
+    }
+    await ctx.answerCallbackQuery(`Selling ${pct}%`);
+    pending.delete(chatId);
+    const row = d.sniper.add("limit_sell", p.target, 0, p.targetMcap, p.direction, pct);
+    const dirSymbol = p.direction === "gte" ? "≥" : "≤";
+    const tpSl = p.direction === "gte" ? "Take Profit" : "Stop Loss";
+    const lines = [
+      `✅ <b>Limit Sell Placed!</b> (${tpSl})`,
+      `🪙 Token: <code>${esc(p.target)}</code>`,
+      `🎯 Trigger: MCap ${dirSymbol} <b>$${compact(p.targetMcap)}</b>`,
+      `🔴 Selling: <b>${pct}%</b> of holdings`,
+    ];
+    if (d.dryRun) lines.push("DRY RUN: the limit sell will report instead of selling.");
+    const v = sniperView();
+    await ctx.reply(`${lines.join("\n")}\n\n${v.text}`, { ...HTML, reply_markup: v.kb });
+  });
+
+  bot.callbackQuery("lsp:cancel", async (ctx) => {
+    pending.delete(ctx.chat!.id);
+    await ctx.answerCallbackQuery("Cancelled");
+    await showSniper(ctx, true);
+  });
+
   bot.callbackQuery(/^snx:(\d+)$/, async (ctx) => {
     const ok = d.sniper.cancel(Number(ctx.match[1]));
-    await ctx.answerCallbackQuery(ok ? "Snipe cancelled" : "Already ended");
+    await ctx.answerCallbackQuery(ok ? "Order cancelled" : "Already ended");
     await showSniper(ctx, true);
   });
 
@@ -493,6 +828,185 @@ export function createBot(d: Deps): Bot {
     return true;
   }
 
+  async function limitBuyStep(
+    ctx: Context,
+    p: Extract<Pending, { kind: "limitTokenAddress" | "limitMcapTarget" | "limitMcapAmount" }>,
+    text: string,
+  ): Promise<boolean> {
+    const chatId = ctx.chat!.id;
+    if (p.kind === "limitTokenAddress") {
+      const parsed = parseInput(text);
+      if (!parsed) {
+        await ctx.reply("⚠️ That isn't a valid token address or link. Please send it again:", HTML);
+        return true;
+      }
+      if (parsed.kind === "stock") {
+        await ctx.reply("⚠️ Stocks are not supported for limit orders.", HTML);
+        return true;
+      }
+      const target = parsed.kind === "meme" ? `meme:${parsed.memeId}` : parsed.accountId;
+      let currentMcap: number | undefined;
+      try {
+        const s = await d.trader.snapshot(target, d.db.settings());
+        if (s.info?.marketCapUsd && s.info.marketCapUsd > 0) {
+          currentMcap = s.info.marketCapUsd;
+        }
+      } catch {}
+      pending.set(chatId, { kind: "limitMcapTarget", target, currentMcap });
+      const mcapInfo = currentMcap ? `\nCurrent Market Cap: <b>$${compact(currentMcap)}</b>\n` : "";
+      await ctx.reply(
+        `🎯 Token: <code>${esc(target)}</code>${mcapInfo}\nReply with target <b>Market Cap</b> in USD (e.g. <code>50k</code>, <code>500000</code>, <code>1.5m</code>):`,
+        { ...HTML, reply_markup: { force_reply: true } },
+      );
+      return true;
+    }
+
+    if (p.kind === "limitMcapTarget") {
+      const targetMcap = parseMcap(text);
+      if (!targetMcap || targetMcap <= 0) {
+        await ctx.reply(
+          "⚠️ Please enter a valid market cap, e.g. <code>50k</code>, <code>250000</code>, or <code>1.5m</code>:",
+          HTML,
+        );
+        return true;
+      }
+      const dir: "lte" | "gte" = p.currentMcap != null && targetMcap > p.currentMcap ? "gte" : "lte";
+      pending.set(chatId, {
+        kind: "limitMcapAmount",
+        target: p.target,
+        targetMcap,
+        direction: dir,
+      });
+      const dirDesc = dir === "gte" ? `≥ $${compact(targetMcap)} (when MCap rises to target)` : `≤ $${compact(targetMcap)} (when MCap dips to target)`;
+      await ctx.reply(
+        `🎯 Target Market Cap: <b>$${compact(targetMcap)}</b>\nTriggers: <b>${dirDesc}</b>\n\nHow much <b>NEAR</b> should this limit buy spend? (e.g. <code>10</code>)`,
+        { ...HTML, reply_markup: { force_reply: true } },
+      );
+      return true;
+    }
+
+    if (p.kind === "limitMcapAmount") {
+      const amount = Number(text.replace(",", "."));
+      if (!Number.isFinite(amount) || amount <= 0) {
+        await ctx.reply("⚠️ Send a valid amount of NEAR to spend, e.g. <code>10</code>.", HTML);
+        return true;
+      }
+      pending.delete(chatId);
+      const row = d.sniper.add("limit_mcap", p.target, amount, p.targetMcap, p.direction);
+      const wallet = await d.trader.walletNear().then(yoctoToNear).catch(() => null);
+      const dirSymbol = p.direction === "gte" ? "≥" : "≤";
+      const lines = [
+        `✅ <b>Limit Buy Placed!</b>`,
+        `🪙 Token: <code>${esc(p.target)}</code>`,
+        `🎯 Trigger: MCap ${dirSymbol} <b>$${compact(p.targetMcap)}</b>`,
+        `💰 Spending: <b>${near(amount)}</b>`,
+      ];
+      if (wallet != null && wallet < amount + 0.1) {
+        lines.push(`⚠️ Your active wallet only has ${near(wallet)}. Be sure it has funds when the limit triggers.`);
+      }
+      if (d.dryRun) lines.push("DRY RUN: the limit buy will report instead of buying.");
+      const v = sniperView();
+      await ctx.reply(`${lines.join("\n")}\n\n${v.text}`, { ...HTML, reply_markup: v.kb });
+      return true;
+    }
+
+    return false;
+  }
+
+  async function limitSellStep(
+    ctx: Context,
+    p: Extract<Pending, { kind: "limitSellTokenAddress" | "limitSellMcapTarget" | "limitSellPct" }>,
+    text: string,
+  ): Promise<boolean> {
+    const chatId = ctx.chat!.id;
+    if (p.kind === "limitSellTokenAddress") {
+      const parsed = parseInput(text);
+      if (!parsed) {
+        await ctx.reply("⚠️ That isn't a valid token address or link. Please send it again:", HTML);
+        return true;
+      }
+      if (parsed.kind === "stock") {
+        await ctx.reply("⚠️ Stocks are not supported for limit orders.", HTML);
+        return true;
+      }
+      const target = parsed.kind === "meme" ? `meme:${parsed.memeId}` : parsed.accountId;
+      let currentMcap: number | undefined;
+      let held = 0;
+      let symbol = target.split(".")[0]!.toUpperCase();
+      try {
+        const s = await d.trader.snapshot(target, d.db.settings());
+        if (s.info?.marketCapUsd && s.info.marketCapUsd > 0) {
+          currentMcap = s.info.marketCapUsd;
+        }
+        if (s.info?.symbol) symbol = s.info.symbol;
+        held = fromRaw(s.balance, s.decimals);
+      } catch {}
+      pending.set(chatId, { kind: "limitSellMcapTarget", target, currentMcap, held, symbol });
+      const mcapInfo = currentMcap ? `\nCurrent Market Cap: <b>$${compact(currentMcap)}</b>` : "";
+      const balanceInfo = held > 0 ? `\n📦 Holding: <b>${compact(held)} ${esc(symbol)}</b>` : "";
+      await ctx.reply(
+        `🔴 Token: <code>${esc(target)}</code>${balanceInfo}${mcapInfo}\n\nReply with target <b>Market Cap</b> in USD to trigger the sell (e.g. <code>250k</code>, <code>1.5m</code>, <code>50k</code>):`,
+        { ...HTML, reply_markup: { force_reply: true } },
+      );
+      return true;
+    }
+
+    if (p.kind === "limitSellMcapTarget") {
+      const targetMcap = parseMcap(text);
+      if (!targetMcap || targetMcap <= 0) {
+        await ctx.reply(
+          "⚠️ Please enter a valid market cap, e.g. <code>250k</code>, <code>500000</code>, or <code>1.5m</code>:",
+          HTML,
+        );
+        return true;
+      }
+      const dir: "lte" | "gte" = p.currentMcap != null && targetMcap < p.currentMcap ? "lte" : "gte";
+      pending.set(chatId, {
+        kind: "limitSellPct",
+        target: p.target,
+        targetMcap,
+        direction: dir,
+      });
+      const dirDesc = dir === "gte" ? `≥ $${compact(targetMcap)} (Take Profit)` : `≤ $${compact(targetMcap)} (Stop Loss)`;
+      const kb = new InlineKeyboard()
+        .text("25%", "lsp:25")
+        .text("50%", "lsp:50")
+        .text("75%", "lsp:75")
+        .text("100%", "lsp:100")
+        .row()
+        .text("✖️ Cancel", "lsp:cancel");
+      await ctx.reply(
+        `🔴 Target Market Cap: <b>$${compact(targetMcap)}</b>\nTriggers: <b>${dirDesc}</b>\n\nWhat <b>percentage</b> of your tokens should be sold?\nTap a preset below or reply with a number (e.g. <code>50</code>):`,
+        { ...HTML, reply_markup: kb },
+      );
+      return true;
+    }
+
+    if (p.kind === "limitSellPct") {
+      const pct = Number(text.replace(/%/, "").replace(",", "."));
+      if (!Number.isFinite(pct) || pct <= 0 || pct > 100) {
+        await ctx.reply("⚠️ Send a percentage between 1 and 100 (e.g. <code>50</code> or <code>100</code>).", HTML);
+        return true;
+      }
+      pending.delete(chatId);
+      const row = d.sniper.add("limit_sell", p.target, 0, p.targetMcap, p.direction, pct);
+      const dirSymbol = p.direction === "gte" ? "≥" : "≤";
+      const tpSl = p.direction === "gte" ? "Take Profit" : "Stop Loss";
+      const lines = [
+        `✅ <b>Limit Sell Placed!</b> (${tpSl})`,
+        `🪙 Token: <code>${esc(p.target)}</code>`,
+        `🎯 Trigger: MCap ${dirSymbol} <b>$${compact(p.targetMcap)}</b>`,
+        `🔴 Selling: <b>${pct}%</b> of holdings`,
+      ];
+      if (d.dryRun) lines.push("DRY RUN: the limit sell will report instead of selling.");
+      const v = sniperView();
+      await ctx.reply(`${lines.join("\n")}\n\n${v.text}`, { ...HTML, reply_markup: v.kb });
+      return true;
+    }
+
+    return false;
+  }
+
   /** Snipe news goes to the admin's chat, since nothing the user tapped started it. */
   d.sniper.onEvent = (e: SnipeEvent) => void reportSnipe(e).catch((err) => console.error("Snipe report:", err));
 
@@ -510,20 +1024,35 @@ export function createBot(d: Deps): Bot {
       }
       case "bought": {
         const r = e.outcome;
-        await send([`✅ <b>Sniped</b> ${who} · ${esc(r.via)} · ${e.secs.toFixed(1)}s`, ...summaryLines(r), r.hashes.map(txLink).join(" ")].join("\n"));
+        const headline =
+          e.snipe.kind === "limit_mcap"
+            ? `🎯 <b>Limit Buy Filled</b>`
+            : e.snipe.kind === "limit_sell"
+              ? `🔴 <b>Limit Sell Filled</b>`
+              : `✅ <b>Sniped</b>`;
+        await send([`${headline} ${who} · ${esc(r.via)} · ${e.secs.toFixed(1)}s`, ...summaryLines(r), r.hashes.map(txLink).join(" ")].join("\n"));
         await Promise.race([r.recorded, new Promise((ok) => setTimeout(ok, 3000))]).catch(() => {});
         await postCard(chatId, e.ref).catch(() => {});
         return;
       }
-      case "failed":
-        await send(`❌ <b>Snipe failed</b> ${who}${e.ref && e.ref !== e.snipe.target ? `\n<code>${esc(e.ref)}</code>` : ""}\n${esc(e.error)}${e.ended ? "\nThis snipe has ended." : ""}`);
+      case "failed": {
+        const headline =
+          e.snipe.kind === "limit_mcap"
+            ? `❌ <b>Limit Buy failed</b>`
+            : e.snipe.kind === "limit_sell"
+              ? `❌ <b>Limit Sell failed</b>`
+              : `❌ <b>Snipe failed</b>`;
+        await send(`${headline} ${who}${e.ref && e.ref !== e.snipe.target ? `\n<code>${esc(e.ref)}</code>` : ""}\n${esc(e.error)}${e.ended ? "\nThis order has ended." : ""}`);
         return;
+      }
       case "skipped":
         await send(`⏭ Skipped <code>${esc(e.launch.token ?? `raise #${e.launch.memeId}`)}</code> from ${who}: ${esc(e.reason)}. Still watching.`);
         return;
-      case "dryRun":
-        await send(`🧪 DRY RUN: would snipe ${near(e.snipe.nearAmount)} of <code>${esc(e.ref)}</code> via ${esc(e.route.label)}. Nothing sent.`);
+      case "dryRun": {
+        const headline = e.snipe.kind === "limit_mcap" ? "limit buy" : e.snipe.kind === "limit_sell" ? "limit sell" : "snipe";
+        await send(`🧪 DRY RUN: would ${headline} of <code>${esc(e.ref)}</code> via ${esc(e.route.label)}. Nothing sent.`);
         return;
+      }
     }
   }
 
@@ -566,6 +1095,132 @@ export function createBot(d: Deps): Bot {
     await showCard(ctx, ref, false);
   });
 
+  async function importWalletStep(ctx: Context, text: string): Promise<boolean> {
+    const chatId = ctx.chat!.id;
+    await ctx.deleteMessage().catch(() => {});
+
+    const parsedInput = parseWalletInput(text);
+    const keyCandidate = parsedInput.privateKeyCandidate;
+    if (!keyCandidate) {
+      await ctx.reply(
+        "⚠️ Could not find a private key in your message.\nPlease send a valid ed25519 private key, e.g. <code>ed25519:...</code>",
+        HTML,
+      );
+      return true;
+    }
+
+    let parsedKey;
+    try {
+      parsedKey = parsePrivateKey(keyCandidate);
+    } catch (e) {
+      await ctx.reply(`⚠️ ${esc(errorText(e))}`, HTML);
+      return true;
+    }
+
+    if (parsedInput.accountId) {
+      return await finalizeWalletImport(ctx, parsedInput.accountId, parsedKey.privateKey, parsedKey.publicKey);
+    }
+
+    const statusMsg = await ctx.reply("🔍 Checking accounts for this key…", HTML).catch(() => null);
+    const discovered = await findAccountsForPublicKey(parsedKey.publicKey);
+    if (statusMsg) await ctx.api.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
+
+    if (discovered.length === 1) {
+      return await finalizeWalletImport(ctx, discovered[0]!, parsedKey.privateKey, parsedKey.publicKey);
+    }
+
+    if (discovered.length > 1) {
+      pending.set(chatId, {
+        kind: "importWalletAccount",
+        privateKey: parsedKey.privateKey,
+        publicKey: parsedKey.publicKey,
+        implicitAccountId: parsedKey.implicitAccountId,
+        candidates: discovered,
+      });
+      const kb = new InlineKeyboard();
+      discovered.slice(0, 6).forEach((acc, i) => {
+        const label = acc.length > 20 ? `${acc.slice(0, 8)}…${acc.slice(-6)}` : acc;
+        kb.text(label, `w_pick:${i}`);
+        if (i % 2 === 1) kb.row();
+      });
+      if (discovered.length % 2 === 1) kb.row();
+      kb.text("✖️ Cancel", "w_cancel");
+      await ctx.reply(
+        `Found multiple accounts for this key:\n${discovered.map((a) => `• <code>${esc(a)}</code>`).join("\n")}\n\nTap an account below or reply with the account ID you wish to use:`,
+        { ...HTML, reply_markup: kb },
+      );
+      return true;
+    }
+
+    const implicitExists = await d.rpc.accountExists(parsedKey.implicitAccountId).catch(() => false);
+    if (implicitExists) {
+      return await finalizeWalletImport(ctx, parsedKey.implicitAccountId, parsedKey.privateKey, parsedKey.publicKey);
+    }
+
+    pending.set(chatId, {
+      kind: "importWalletAccount",
+      privateKey: parsedKey.privateKey,
+      publicKey: parsedKey.publicKey,
+      implicitAccountId: parsedKey.implicitAccountId,
+    });
+    const kb = new InlineKeyboard()
+      .text(`Use Implicit (${parsedKey.implicitAccountId.slice(0, 8)}…)`, "w_pick:imp")
+      .row()
+      .text("✖️ Cancel", "w_cancel");
+    await ctx.reply(
+      `🔑 <b>Key Verified</b>\nPublic key: <code>${esc(parsedKey.publicKey)}</code>\n\nCould not automatically find an account on-chain for this key.\n\nReply with your <b>NEAR Account ID</b> (e.g. <code>alice.near</code>) or tap below to use the implicit account:`,
+      { ...HTML, reply_markup: kb },
+    );
+    return true;
+  }
+
+  async function finalizeWalletImport(ctx: Context, accountId: string, privateKey: string, publicKey: string): Promise<boolean> {
+    const chatId = ctx.chat!.id;
+    pending.delete(chatId);
+    const checkingMsg = await ctx.reply(`⚡ Verifying access key for <code>${esc(accountId)}</code>…`, HTML).catch(() => null);
+    const res = await verifyAccessKey(d.rpc, accountId, publicKey);
+    if (checkingMsg) await ctx.api.deleteMessage(chatId, checkingMsg.message_id).catch(() => {});
+
+    if (!res.valid) {
+      await ctx.reply(
+        `❌ <b>Verification Failed</b>\nAccount: <code>${esc(accountId)}</code>\n\n${esc(res.error ?? "The key is not authorized for this account.")}\n\nMake sure the account ID and private key match.`,
+        HTML,
+      );
+      return true;
+    }
+
+    try {
+      d.db.addWallet(accountId, privateKey, true);
+      const newSigner = new Signer(d.rpc, accountId, privateKey, d.dryRun);
+      await newSigner.init();
+      const newFt = new Ft(d.rpc, accountId);
+      d.trader.switchSigner(newSigner, newFt);
+      d.sniper.refresh();
+
+      const [bal, nearUsd] = await Promise.all([
+        d.trader.walletNear().then(yoctoToNear).catch(() => 0),
+        d.intear.nearUsd().catch(() => 0),
+      ]);
+
+      const kb = new InlineKeyboard().text("👛 Wallets", "wallets").text("⬅️ Home", "home");
+      const lines = [
+        "✅ <b>Wallet Imported & Activated!</b>",
+        "",
+        `Account: <code>${esc(accountId)}</code>`,
+        `Balance: <b>${near(bal)}</b> · ${usd(bal * nearUsd)}`,
+        `Key Type: ${res.permission === "FullAccess" ? "Full Access Key" : "Function Call Key"}`,
+        `Public Key: <code>${esc(publicKey)}</code>`,
+        "",
+        "The bot is now trading with this wallet.",
+      ];
+      await ctx.reply(lines.join("\n"), { ...HTML, reply_markup: kb });
+      return true;
+    } catch (e) {
+      await ctx.reply(`⚠️ Failed to activate wallet: ${esc(errorText(e))}`, HTML);
+      return true;
+    }
+  }
+
   async function handlePending(ctx: Context, p: Pending, text: string): Promise<boolean> {
     const chatId = ctx.chat!.id;
     if (p.kind === "wdAddr" || p.kind === "wdAmount") {
@@ -573,6 +1228,18 @@ export function createBot(d: Deps): Bot {
       return true;
     }
     if (p.kind === "snipeTarget" || p.kind === "snipeAmount") return snipeStep(ctx, p, text);
+    if (p.kind === "limitTokenAddress" || p.kind === "limitMcapTarget" || p.kind === "limitMcapAmount") {
+      return await limitBuyStep(ctx, p, text);
+    }
+    if (p.kind === "limitSellTokenAddress" || p.kind === "limitSellMcapTarget" || p.kind === "limitSellPct") {
+      return await limitSellStep(ctx, p, text);
+    }
+    if (p.kind === "importWallet") return await importWalletStep(ctx, text);
+    if (p.kind === "importWalletAccount") {
+      await ctx.deleteMessage().catch(() => {});
+      const accountId = text.toLowerCase() === "implicit" ? p.implicitAccountId : text.trim();
+      return await finalizeWalletImport(ctx, accountId, p.privateKey, p.publicKey);
+    }
     const numbers = text.split(/[\s,]+/).filter(Boolean).map(Number);
     const valid = numbers.length > 0 && numbers.every((n) => Number.isFinite(n) && n > 0);
     if (!valid) {

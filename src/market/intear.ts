@@ -13,6 +13,7 @@ export const TOKEN_FIELDS = [
   "fdv_usd",
   "main_pool",
   "price_change_24h",
+  "price_change_15m",
 ] as const;
 
 export interface TokenInfo {
@@ -29,6 +30,7 @@ export interface TokenInfo {
   mcapSupply: number;
   mainPool: string | null;
   change24h: number | null;
+  change15m: number | null;
 }
 
 export interface Trade {

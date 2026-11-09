@@ -14,12 +14,14 @@ import { createBot } from "./bot/app.js";
 import { Sniper } from "./sniper/sniper.js";
 async function main() {
     const cfg = loadConfig();
-    const rpc = new Rpc(cfg.rpcUrls);
-    const signer = new Signer(rpc, cfg.accountId, cfg.privateKey, cfg.dryRun);
-    await signer.init();
     const db = new Db(cfg.dbPath);
+    db.ensureWallet(cfg.accountId, cfg.privateKey);
+    const activeWallet = db.activeWallet() ?? { accountId: cfg.accountId, privateKey: cfg.privateKey, id: 1, isActive: true, createdAt: Date.now() };
+    const rpc = new Rpc(cfg.rpcUrls);
+    const signer = new Signer(rpc, activeWallet.accountId, activeWallet.privateKey, cfg.dryRun);
+    await signer.init();
     const intear = new Intear();
-    const ft = new Ft(rpc, cfg.accountId);
+    const ft = new Ft(rpc, activeWallet.accountId);
     const trader = new Trader(rpc, signer, ft, intear, db, { intearApiKey: cfg.intearApiKey, oneClickJwt: cfg.oneClickJwt });
     // Older trade-log rows don't say which wallet made them; settle that from the chain.
     void trader
@@ -33,6 +35,7 @@ async function main() {
         { command: "start", description: "Wallet and menu" },
         { command: "positions", description: "Open positions" },
         { command: "snipe", description: "Snipe a creator's next launch or a token" },
+        { command: "wallets", description: "Switch or import wallets" },
         { command: "settings", description: "Buy/sell buttons, slippage, route" },
     ]);
     const stop = () => {
@@ -42,7 +45,7 @@ async function main() {
     };
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
-    console.log(`Trading as ${cfg.accountId} (key ${signer.publicKey})${cfg.dryRun ? " [DRY RUN]" : ""}`);
+    console.log(`Trading as ${activeWallet.accountId} (key ${signer.publicKey})${cfg.dryRun ? " [DRY RUN]" : ""}`);
     await bot.start({ drop_pending_updates: true, allowed_updates: ["message", "callback_query"] });
 }
 main().catch((e) => {
